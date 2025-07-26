@@ -1,0 +1,98 @@
+name: Build (Nuitka) & Release KTS-COPIER
+
+on:
+  push:
+    tags:
+      - 'v*'                  # e.g. v1.0.0-stable
+  workflow_dispatch:          # Manual run
+
+jobs:
+  build-nuitka:
+    runs-on: windows-latest
+
+    env:
+      # Version fallback if not tagged
+      APP_VERSION_FALLBACK: 0.0.0
+
+      # These are used by the app's self-updater (dashboard.py)
+      GITHUB_OWNER: ${{ github.DATYTECH }}
+      GITHUB_REPO:  ${{ github.event.KTS-COPIER }}
+
+      # Your runtime secrets (kept out of the binary source code)
+      SUPABASE_URL: ${{ secrets.https://egoejyvpxukrdhxikxqk.supabase.co }}
+      SUPABASE_KEY: ${{ secrets.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnb2VqeXZweHVrcmRoeGlreHFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMxMTE1MDcsImV4cCI6MjA2ODY4NzUwN30.ekaaA2UW1zXI-AqtYm7k2cUqrMls4UsmNo6E2DXI2Rk}}
+      ADMIN_TABLE:  admin_users
+      LICENSE_TABLE: user1_key
+
+      # Default release channel (the exe name & updater can rely on it)
+      CHANNEL: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF##*/}" == v* ]]; then
+            echo "version=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${APP_VERSION_FALLBACK}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka zstandard ordered-set packaging
+          pip install -r src/requirements.txt
+
+      - name: Nuitka build (dashboard.exe)
+        shell: powershell
+        run: |
+          $env:APP_VERSION = "${{ steps.version.outputs.version }}"
+          python -m nuitka `
+            --onefile `
+            --standalone `
+            --windows-console-mode=disable `
+            --enable-plugin=tk-inter `
+            --windows-icon-from-ico=icons/app.ico `
+            --product-name="KTS-COPIER" `
+            --file-version=$env:APP_VERSION `
+            --product-version=$env:APP_VERSION `
+            --company-name="KTS" `
+            --file-description="KTS-COPIER Telegram Signal Copier" `
+            --include-data-files=icons\app.ico=icons\app.ico `
+            --output-filename=KTS-COPIER-${{ steps.version.outputs.version }}-${{ env.CHANNEL }}.exe `
+            src/dashboard.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KTS-COPIER-${{ steps.version.outputs.version }}
+          path: |
+            KTS-COPIER-*.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "KTS-COPIER ${{ steps.version.outputs.version }}"
+          draft: false
+          prerelease: false
+          files: |
+            KTS-COPIER-*.exe
